@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+import scipy.io.wavfile
+import argparse
+import numpy
+import matplotlib.mlab as mlab
+import matplotlib.pyplot as plt
+
+# compress to short array, with reasonable bit rate
+def compress_channel(min_step, rate, origin_channel):
+    step = int(rate * min_step)
+    channel = []
+    i = 0
+    sum = 0
+    for bit in origin_channel:
+        sum += bit
+        i += 1
+        if i == step:
+            # use average value
+            channel.append(int(sum / step))
+            i = 0
+            sum = 0
+    if i != 0:
+        channel.append(int(sum / i))
+    return channel
+
+def trim(bits, min_step, head, tail, max_threshold):
+    size = len(bits)
+    threshold = int(size * max_threshold)
+    head_step = min(threshold, int(head / min_step))
+    tail_step = min(threshold, int(tail / min_step))
+    return bits[head_step:(size - tail_step)]
+
+# calculate absolute delta of all neighbouring items in a certain range
+def normalize_channel(compressed_channel, min_step, step):
+    channel = []
+    count_step = int(step / min_step)
+    for i in range(0, len(compressed_channel) - count_step - 1):
+        sum = 0
+        for j in range(0, 9):
+            sum += abs(compressed_channel[i + j] - compressed_channel[i + j + 1])
+        channel.append(sum)
+    return channel
+
+# only remain the max value within a certain range
+# filter 0 values
+# return [timestamp, value]
+def pick_top(channel, min_step, step):
+    target = []
+    count_step = int(step / min_step)
+    size = len(channel)
+    for i in range(0, len(channel)):
+        value = channel[i]
+        for j in range(int(-count_step / 2), int(count_step / 2)):
+            new_index = i + j
+            if new_index > 0 and new_index < size and new_index != i:
+                if (channel[new_index] > channel[i]) or (channel[new_index] == channel[i] and i > new_index):
+                    value = 0
+                    break
+        if value > 0:
+            target.append([i * min_step, value])
+    return target
+
+def purge(bits_with_ts, rank_threshold, value_position, value_threshold):
+    sorted_bits = []
+    for ts, bit in bits_with_ts:
+        sorted_bits.append(bit)
+    list.sort(sorted_bits)
+    size = len(sorted_bits)
+    rank_bar = sorted_bits[int(size * rank_threshold)]
+    value_bar = sorted_bits[int(size * value_position)] * value_threshold
+    bar = min(rank_bar, value_bar)
+    target = []
+    for ts, bit in bits_with_ts:
+        if bit > bar:
+            target.append([ts, bit])
+    return target
+
+def cut(bits_with_ts):
+    cuts = []
+    for i in range(1, len(bits_with_ts) - 1):
+        cuts.append(bits_with_ts[i][0] - bits_with_ts[i - 1][0])
+    return cuts
+
+# all >= 0
+def draw_with_ts(bits_with_ts, start, end):
+    max = 0
+    for ts, bit in bits_with_ts:
+        if bit > max:
+            max = bit
+    max_width = 120
+    for ts, bit in bits_with_ts:
+        related_dis = (0.0 + bit) / max
+        width = int(related_dis * max_width)
+        if ts > start and ts < end:
+            print("{:4.4f}".format(ts), ": ", "{:5}".format(bit), "*" * width)
+    print("size: ", len(bits_with_ts))
+
+def draw(channel, min_step, start, end):
+    min_v = min(channel)
+    max_v = max(channel)
+    max_width = 120
+    distance = max_v - min_v
+    time = 0
+    for bit in channel:
+        offset = bit - min_v
+        related_dis = (0.0 + offset) / distance
+        width = int(related_dis * max_width)
+        if time > start and time < end:
+            print("{:4.4f}".format(time), ": ", "{:5}".format(bit), "*" * width)
+        time += min_step
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-f', dest='file', help='file path')
+    args = parser.parse_args()
+    file = args.file
+    if not file:
+        # TODO refine help message
+        print("need -f arg")
+        return
+
+    rate, audio = scipy.io.wavfile.read(file)
+    print("rate", rate)
+    print("length", audio.shape[0] / rate)
+    print("dtype", audio.dtype)
+    print("shape", audio.shape, type, type(audio.shape))
+
+    origin_channel = audio[:]
+    print("original channel", origin_channel, "length", len(origin_channel))
+
+    min_step = 0.005 # secs
+
+    compressed_bits = compress_channel(min_step, rate, origin_channel)
+    trimmed_bits = trim(compressed_bits, min_step, 10, 10, 0.1)
+    normalized_channel = normalize_channel(trimmed_bits, min_step, 0.05)
+    picked_bits_with_ts = pick_top(normalized_channel, min_step, 0.25)
+    purged_bits_with_ts = purge(picked_bits_with_ts, 0.2, 0.99, 0.2)
+
+    draw_with_ts(picked_bits_with_ts, 50.0, 100)
+    print()
+    draw_with_ts(purged_bits_with_ts, 50.0, 100)
+    print()
+
+    cuts = cut(purged_bits_with_ts)
+    num_bins = 100
+    n, bins, patches = plt.hist(cuts, num_bins, facecolor='blue', alpha=0.5)
+    plt.show()
+
+main()
+
