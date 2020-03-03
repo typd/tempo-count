@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-import scipy.io.wavfile
 import argparse
 import numpy
+from pydub import AudioSegment
 import matplotlib.mlab as mlab
 import matplotlib.pyplot as plt
 
@@ -119,27 +119,26 @@ def main():
         print("need -f arg")
         return
 
-    rate, audio = scipy.io.wavfile.read(file)
-    print("rate", rate)
-    print("length", audio.shape[0] / rate)
-    print("dtype", audio.dtype)
-    print("shape", audio.shape, type, type(audio.shape))
-
-    origin_channel = audio[:]
-    print("original channel", origin_channel, "length", len(origin_channel))
+    track = AudioSegment.from_file(file)
+    rate = track.frame_rate
+    bits = track.get_array_of_samples().tolist()
+    print("rate: ", rate)
+    print("length: ", len(bits) / rate, "s")
 
     min_step = 0.005 # secs
 
-    compressed_bits = compress_channel(min_step, rate, origin_channel)
+    compressed_bits = compress_channel(min_step, rate, bits)
     trimmed_bits = trim(compressed_bits, min_step, 10, 10, 0.1)
     normalized_channel = normalize_channel(trimmed_bits, min_step, 0.05)
     picked_bits_with_ts = pick_top(normalized_channel, min_step, 0.25)
     purged_bits_with_ts = purge(picked_bits_with_ts, 0.2, 0.99, 0.2)
 
+    """
     draw_with_ts(picked_bits_with_ts, 50.0, 100)
     print()
     draw_with_ts(purged_bits_with_ts, 50.0, 100)
     print()
+    """
 
     cuts = cut(purged_bits_with_ts)
     num_bins = 100
